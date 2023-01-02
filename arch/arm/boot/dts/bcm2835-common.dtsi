@@ -37,6 +37,10 @@
 			reg = <0x7ec00000 0x1000>;
 			interrupts = <1 10>;
 		};
+
+		rpi_debug: rpi-debug {
+			compatible = "rpi,debug";
+		};
 	};
 };
 
