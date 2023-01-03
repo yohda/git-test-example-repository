@@ -19,7 +19,6 @@
 #include <linux/uaccess.h> 
 #include <asm/memory.h> 
 
-
 uint32_t raspbian_debug_state = 0; 
 static struct dentry *rpi_kernel_debug_debugfs_root; 
 
@@ -27,7 +26,7 @@ static int rpi_kernel_debug_stat_get(void *data, u64 *val)
 { 
 	printk("===[%s][L:%d][val:%d]===", __func__, __LINE__, raspbian_debug_state); 
 	*val = raspbian_debug_state; 
-
+	
 	return 0; 
 } 
 
@@ -49,7 +48,7 @@ DEFINE_SIMPLE_ATTRIBUTE(rpi_kernel_debug_stat_fops, rpi_kernel_debug_stat_get, r
 static int rpi_kernel_debug_debugfs_drvier_probe(struct platform_device *pdev) 
 { 
 	printk("===[%s][L:%d]", __func__, __LINE__); 
-
+	
 	return 0;
 } 
  
@@ -61,7 +60,6 @@ static struct platform_driver rpi_kernel_debug_debugfs_driver = {
 		.of_match_table = rpi_debug_dt_match,
 	},
 }; 
-
 
 //  devicetree에 작성하지 않아도 호출이 되는 건가? 호출이 된다.
 // inticall에 등록하는 것만으로 호출이 되는 것으로 보인다.
