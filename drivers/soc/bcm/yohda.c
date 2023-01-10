@@ -19,14 +19,77 @@
 #include <linux/uaccess.h> 
 #include <asm/memory.h> 
 
+#include <linux/kobject.h>
+#include <linux/sysfs.h>
 #include <linux/gpio.h>
 
 #define GPIO_17	17
+int yohda_value = 0;
+/*
+// 아래의 struct attribute는 name과 permission 필드가 포함되어 있다. 
 
+struct kobj_attribute {
+ struct attribute attr;
+ ssize_t (*show)(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
+ ssize_t (*store)(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count);
+};
+
+//우리는 아래 매크로를 사용해서 sysfs를 만들자. 저 name은 변수를 집어넣는것이 아니다.
+//저기에 들어가는 글자의 변수를 새로 생성해준다.
+#define __ATTR(_name, _mode, _show, _store) {    \
+ .attr = {.name = __stringify(_name),    \
+   .mode = VERIFY_OCTAL_PERMISSIONS(_mode) },  \
+ .show = _show,      \
+ .store = _store,      \
+}
+
+*/
+
+
+// 아래 show함수와 store함수의 반환값의 의미가 솔직히 뭔지 잘 모르겠다. 아래의 링크에 뭔가 나와있는거 같긴한데, 정확한 의미를 모르겠다.
+// https://www.oreilly.com/library/view/linux-device-drivers/0596000081/ch03s08.html
+static ssize_t yohda_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	pr_info("yohfa sysfs - read\n");
+	// int integer = 123;
+	// sprintf(buf, "integer : (decimal) %d (octal) %o \n", integer, integer);
+ 	// printf("%s \n", buf);
+	// integer : <decimal> 123 <octal> 173
+	return sprintf(buf, "%d", yohda_value);
+}
+
+static ssize_t yohda_sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	pr_info("yohfa sysfs - write\n");
+	gpio_set_value(GPIO_17, (buf[0] == '0' ? 0 : 1));
+	// char buffer[256]="name:홍길동 num:12 age:20";
+	// scanf(buffer,"name:%s num:%d age:%d",name,&num,&age);
+	// printf("이름:%s 번호:%d 나이:%d \n",name,num,age);
+	// 출력 결과 - "이름:홍길동 번호:12 나이:20"	
+	sscanf(buf, "%d", &yohda_value); 	
+	return count;
+}
+
+struct kobj_attribute yohda_attr = __ATTR(yohda_value, 0660, yohda_sysfs_show, yohda_sysfs_store);
 static int yohda_kernel_debug_debugfs_drvier_probe(struct platform_device *pdev) 
 { 
 	int err;
+	struct kobject *kobj_yohda;
 	printk("===[%s][L:%d]", __func__, __LINE__); 
+
+	// 첫 번째 인자는 생성할 폴더 이름이고, 두 번째 인자는 부모 폴더를 지정한다.
+	// 그래서 부모 폴더 아래에 생성하게 만든다. NULL일 경우, /sys/yohda_sysfs/ 폴더를 생성한다.
+	// 두 번째 인자인 kernel_kobj, firmware_kobj, fs_kobj는 'linux/kobject.h'에 생성되어 있는 전역변수이다.
+	// 아래의 코드를 통해서 /sys/kernel/yohda_sysfs 폴더를 생성한다.
+	kobj_yohda = kobject_create_and_add("yohda_sysfs", kernel_kobj); 
+	//kobj_yohda = kobject_create_and_add("yohda_sysfs", firmware_kobj); // /sys/firmware/yohda_sysfs 폴더를 생성. 
+	//kobj_yohda = kobject_create_and_add("yohda_sysfs", fs_kobj); // /sys/fs/yohda_sysfs 폴더를 생성.
+
+	if(sysfs_create_file(kobj_yohda, &yohda_attr.attr))
+	{
+		pr_err("Failed to create sysfs file\n");
+		goto err_sysfs;
+	}
 
 	// gpio_is_valid() 함수는 인자로 들어가는 숫자가 실제 GPIO 핀인지 확인해준다.
 	// 이게 무슨말이냐면, 실제 물리핀 번호와 GPIO 번호는 다를 수 있다.
@@ -53,12 +116,17 @@ static int yohda_kernel_debug_debugfs_drvier_probe(struct platform_device *pdev)
 	// 첫 번재 인자로 주어진 GPIO를 output으로 설정한다.
 	// 두 번째 인자는 초기값을 1로 할지, 0으로 할지 설정할 수 있다.	
 	gpio_direction_output(GPIO_17, 0);
-
+	
 	return 0;
 
 gpio_err:
 	gpio_free(GPIO_17);
-	
+
+err_sysfs:
+	// 아래의 함수를 호출함으로써 sysfs 사용한 메모리를 해제한다.	
+	kobject_put(kobj_yohda);
+	sysfs_remove_file(kernel_kobj, &yohda_attr.attr);
+
 	return -1;
 } 
 
