@@ -1,60 +1,63 @@
-#include <linux/module.h>
-#include <linux/moduleparam.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
 #include <linux/platform_device.h>
-#include <linux/io.h>
-#include <linux/init.h> 
-#include <linux/memblock.h> 
-#include <linux/slab.h> 
-#include <linux/of.h> 
-#include <linux/of_address.h> 
-#include <linux/cpu.h> 
-#include <linux/delay.h> 
-#include <asm/setup.h> 
-#include <linux/input.h> 
-#include <linux/debugfs.h> 
-#include <linux/timer.h> 
-#include <linux/workqueue.h> 
-#include <linux/mutex.h> 
-#include <linux/slub_def.h> 
-#include <linux/uaccess.h> 
-#include <asm/memory.h> 
-
-#include <linux/kobject.h>
-#include <linux/sysfs.h>
-#include <linux/gpio.h>
-
-#define GPIO_17	17
-int yohda_value = 0;
 /*
-// 아래의 struct attribute는 name과 permission 필드가 포함되어 있다. 
-
-struct kobj_attribute {
- struct attribute attr;
- ssize_t (*show)(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
- ssize_t (*store)(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count);
-};
-
-//우리는 아래 매크로를 사용해서 sysfs를 만들자. 저 name은 변수를 집어넣는것이 아니다.
-//저기에 들어가는 글자의 변수를 새로 생성해준다.
-#define __ATTR(_name, _mode, _show, _store) {    \
- .attr = {.name = __stringify(_name),    \
-   .mode = VERIFY_OCTAL_PERMISSIONS(_mode) },  \
- .show = _show,      \
- .store = _store,      \
-}
-
+	- function list
+		- platform_device_register 
+		- platform_driver_register
+	- variable list
+		- struct platform_device
+		- struct platform_driver
+*/
+#include <linux/kobject.h>
+/*
+	- function list
+	- variable list
+*/
+#include <linux/sysfs.h>
+/*
+	- function list
+	- variable list
+*/
+#include <linux/gpio.h>
+/*
+	- function list
+		- gpio_request
+		- gpio_is_valid
+		- gpio_set_value
+		- gpio_direction_output, gpio_direction_input
+		- gpio_to_irq
+		- gpio_free
+	- variable list
+		-
+*/
+#include <linux/interrupt.h>
+/*
+	- function list
+		- request_irq
+	- variable list
+		- IRQF_TRIGGER_RISING
 */
 
+#define GPIO_4 4	
+#define GPIO_17	17
+int yohda_value = 0;
+int yohda_led_toggle = 0;
 
-// 아래 show함수와 store함수의 반환값의 의미가 솔직히 뭔지 잘 모르겠다. 아래의 링크에 뭔가 나와있는거 같긴한데, 정확한 의미를 모르겠다.
-// https://www.oreilly.com/library/view/linux-device-drivers/0596000081/ch03s08.html
+#define EN_DEBOUNCE
+
+#ifdef EN_DEBOUNCE
+// 인터럽트시에 DEBOUNCE가 굉장히 심하다.
+// EN_DEBOUNCE feature에 묶여있는 코드를 통해서 인터럽트가 채터링 혹 바운싱 되는 것을 막을 수 있다. 이건 임시 방편이다.
+#include <linux/jiffies.h>
+extern unsigned long volatile jiffies;
+unsigned long old_jiffie = 0;
+#endif
+
 static ssize_t yohda_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	pr_info("yohfa sysfs - read\n");
-	// int integer = 123;
-	// sprintf(buf, "integer : (decimal) %d (octal) %o \n", integer, integer);
- 	// printf("%s \n", buf);
-	// integer : <decimal> 123 <octal> 173
+	
 	return sprintf(buf, "%d", yohda_value);
 }
 
@@ -62,28 +65,39 @@ static ssize_t yohda_sysfs_store(struct kobject *kobj, struct kobj_attribute *at
 {
 	pr_info("yohfa sysfs - write\n");
 	gpio_set_value(GPIO_17, (buf[0] == '0' ? 0 : 1));
-	// char buffer[256]="name:홍길동 num:12 age:20";
-	// scanf(buffer,"name:%s num:%d age:%d",name,&num,&age);
-	// printf("이름:%s 번호:%d 나이:%d \n",name,num,age);
-	// 출력 결과 - "이름:홍길동 번호:12 나이:20"	
+	
 	sscanf(buf, "%d", &yohda_value); 	
 	return count;
 }
 
 struct kobj_attribute yohda_attr = __ATTR(yohda_value, 0660, yohda_sysfs_show, yohda_sysfs_store);
+
+irqreturn_t yohda_irq_handler(int irq, void *dev_id)
+{
+#ifdef EN_DEBOUNCE
+	unsigned long diff = jiffies - old_jiffie;
+	if(diff < 20)
+	{
+		return IRQ_HANDLED;
+	}
+	old_jiffie = jiffies;
+#endif
+
+	pr_info("GPIO_4 is rising at the moment!");
+
+	yohda_led_toggle = 0x01 ^ yohda_led_toggle;
+	gpio_set_value(GPIO_17, 0);
+	
+	return IRQ_HANDLED;
+}
+
 static int yohda_kernel_debug_debugfs_drvier_probe(struct platform_device *pdev) 
 { 
-	int err;
+	int err, irq_number;
 	struct kobject *kobj_yohda;
 	printk("===[%s][L:%d]", __func__, __LINE__); 
 
-	// 첫 번째 인자는 생성할 폴더 이름이고, 두 번째 인자는 부모 폴더를 지정한다.
-	// 그래서 부모 폴더 아래에 생성하게 만든다. NULL일 경우, /sys/yohda_sysfs/ 폴더를 생성한다.
-	// 두 번째 인자인 kernel_kobj, firmware_kobj, fs_kobj는 'linux/kobject.h'에 생성되어 있는 전역변수이다.
-	// 아래의 코드를 통해서 /sys/kernel/yohda_sysfs 폴더를 생성한다.
 	kobj_yohda = kobject_create_and_add("yohda_sysfs", kernel_kobj); 
-	//kobj_yohda = kobject_create_and_add("yohda_sysfs", firmware_kobj); // /sys/firmware/yohda_sysfs 폴더를 생성. 
-	//kobj_yohda = kobject_create_and_add("yohda_sysfs", fs_kobj); // /sys/fs/yohda_sysfs 폴더를 생성.
 
 	if(sysfs_create_file(kobj_yohda, &yohda_attr.attr))
 	{
@@ -91,21 +105,12 @@ static int yohda_kernel_debug_debugfs_drvier_probe(struct platform_device *pdev)
 		goto err_sysfs;
 	}
 
-	// gpio_is_valid() 함수는 인자로 들어가는 숫자가 실제 GPIO 핀인지 확인해준다.
-	// 이게 무슨말이냐면, 실제 물리핀 번호와 GPIO 번호는 다를 수 있다.
-	// 라즈베리파이 3 모델 B의 경우, 실제 물리적인 7번핀에는 GPIO 4번으로 할당되어 있다.
-	// 물론, kernel 사용하는 모든 gpio_xxxx 함수들에는 실제 물리핀번호가 아닌 GPIO로 할당된 번호를 사용해야 한다.
-	// 반환 : valid 하지 않으면, false. valid 하면 true.
 	err = gpio_is_valid(GPIO_17);
 	if(!err)
 	{
 		pr_err("GPIO%d is not valid\n", GPIO_17);
 	}
 
-	// gpio_request() 함수를 쓰는 이유는 이 파일에서만 해당 GPIO를 독점하기 위해서다.
-	// gpio_request() 함수를 사용하면 다른 사용자가 shell에서 해당 gpio를 export 하려고 하면, device busy error를 출력한다. 다른 드라이버나 다른 프로세스에서도 해당 gpio를 사용할 수 없다. 오직 여기서만 사용이 가능하다.
-	// 즉, gpio를 여기서만 독점해야 할 경우, gpio_request()를 사용해야 한다.
-	// 반환 : 성공 시 0 반환. 실패 시 음수 에러 코드 반환. 
 	err = gpio_request(GPIO_17, "yohda_gpio_output");
 	if(err < 0)
 	{
@@ -113,17 +118,53 @@ static int yohda_kernel_debug_debugfs_drvier_probe(struct platform_device *pdev)
 		goto gpio_err;
 	}
 
-	// 첫 번재 인자로 주어진 GPIO를 output으로 설정한다.
-	// 두 번째 인자는 초기값을 1로 할지, 0으로 할지 설정할 수 있다.	
 	gpio_direction_output(GPIO_17, 0);
+
+	err = gpio_is_valid(GPIO_4);
+	if(!err)
+	{
+		pr_err("GPIO%d is not valid\n", GPIO_4);
+	}
+
+	err = gpio_request(GPIO_4, "yohda_gpio_input");
+	if(err < 0)
+	{
+		pr_err("err:%d, GPIO%d won`t be used\n", err, GPIO_4);
+		goto gpio_err;
+	}
 	
+	gpio_direction_input(GPIO_4);
+
+#ifndef EN_DEBOUNCE
+	// 이게 실제로 먹히지가 않는다. 컴파일시 에러가 나지 않는 거 보면, 존재하는 API인걸로 보이는데 동작은 하지 않는 것 같다.
+	if(gpio_set_debounce(GPIO_4, 200) < 0)
+	{
+		pr_err("Failed to set debounce time of gpio%d", GPIO_4);
+	}
+#endif
+
+	irq_number = gpio_to_irq(GPIO_4);
+	if(irq_number <= 0)
+	{
+		pr_err("err: %d, Failed to get irq number from gpio number", irq_number);
+		goto gpio_err;
+	}
+
+	err = request_irq(irq_number, (void *)yohda_irq_handler, IRQF_TRIGGER_RISING, "yohda_irq_handler", NULL);
+	if(err)
+	{
+		pr_err("Failed to register the irq handler on irq number: %d", irq_number);
+		goto gpio_err;
+	}
+
+	pr_info("yohda device driver probe was successful\n");
 	return 0;
 
 gpio_err:
 	gpio_free(GPIO_17);
+	gpio_free(GPIO_4);
 
 err_sysfs:
-	// 아래의 함수를 호출함으로써 sysfs 사용한 메모리를 해제한다.	
 	kobject_put(kobj_yohda);
 	sysfs_remove_file(kernel_kobj, &yohda_attr.attr);
 
